@@ -320,12 +320,22 @@ const WarningText = styled.p`
   font-style: italic;
 `;
 
-// ... (les autres styled components existants restent les mêmes)
+const CampaignStatus = styled.div`
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 5px 10px;
+  border-radius: 15px;
+  background-color: ${props => props.isComplete ? '#4CAF50' : '#FF6F61'};
+  color: white;
+  font-size: 12px;
+  z-index: 2;
+`;
 
 const CampaignCard = ({ campaign, onEdit, onUpdate }) => {
   const navigate = useNavigate();
-  const userRole = localStorage.getItem('userRole');
   const [userId, setUserId] = useState(null);
+  const [userRole, setUserRole] = useState(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const [showEditModal, setShowEditModal] = useState(false);
@@ -341,30 +351,42 @@ const CampaignCard = ({ campaign, onEdit, onUpdate }) => {
 
   useEffect(() => {
     const id = localStorage.getItem('userId');
+    const role = localStorage.getItem('userRole');
     setUserId(id);
-    if (campaign.currentAmount >= campaign.targetAmount) {
-      handleDelete();
-    }
-
+    setUserRole(role);
   }, []);
+
+  const isCampaignComplete = campaign.currentAmount >= campaign.targetAmount;
 
   const handleDelete = async () => {
     try {
-      if (!campaign._id) {  // Changé de _id à id
+      if (!campaign._id) {
         toast.error("ID de campagne non valide");
         return;
       }
 
-      await deleteCampaign(campaign._id);  // Changé de _id à id
+      // Check authentication before delete
+      const token = localStorage.getItem('token');
+      if (!token) {
+        toast.error('Session expirée, veuillez vous reconnecter');
+        navigate('/login');
+        return;
+      }
+
+      await deleteCampaign(campaign._id);
       toast.success("Campagne supprimée avec succès !");
       setShowDeleteModal(false);
       if (onUpdate) onUpdate();
     } catch (error) {
       console.error("Erreur lors de la suppression :", error);
-      toast.error("Erreur lors de la suppression de la campagne");
+      if (error.response?.status === 401) {
+        toast.error('Session expirée, veuillez vous reconnecter');
+        navigate('/login');
+      } else {
+        toast.error("Erreur lors de la suppression de la campagne");
+      }
     }
   };
-
 
   const handleEditClick = (e) => {
     e.stopPropagation();
@@ -402,13 +424,21 @@ const CampaignCard = ({ campaign, onEdit, onUpdate }) => {
     }));
   };
 
-  const handleViewMore = () => {
+  const handleViewMore = (e) => {
+    e.stopPropagation();
     navigate(`/campaign/${campaign._id}`);
   };
 
   const handleDonateClick = (e) => {
     e.stopPropagation();
-    navigate(`/donation/${campaign.id}`);
+    const userRole = localStorage.getItem('userRole');
+
+    if (userRole !== 'donor') {
+      toast.error('Seuls les donateurs peuvent faire des dons');
+      return;
+    }
+
+    navigate(`/donation/${campaign._id}`);
   };
 
   const currentAmount = campaign.currentAmount;
@@ -418,7 +448,7 @@ const CampaignCard = ({ campaign, onEdit, onUpdate }) => {
     <>
       <CardWrapper>
         <IconWrapper>
-          {(userId === campaign.createdBy || userRole === 'association') && (
+          {(userId === campaign.createdBy || userRole === 'association') && !isCampaignComplete && (
             <>
               <FontAwesomeIcon
                 icon={faEdit}
@@ -437,6 +467,10 @@ const CampaignCard = ({ campaign, onEdit, onUpdate }) => {
             </>
           )}
         </IconWrapper>
+
+        <CampaignStatus isComplete={isCampaignComplete}>
+          {isCampaignComplete ? 'Objectif atteint' : 'En cours'}
+        </CampaignStatus>
 
         <BannerImage src={campaign.bannerImage} alt={campaign.name} />
         <CampaignInfo>

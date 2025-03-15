@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { fetchCampaignDetails } from '../../api/api';
 import styled from 'styled-components';
+import { toast } from 'react-toastify';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faDonate } from '@fortawesome/free-solid-svg-icons';
 
 // Conteneur principal
 const DetailsContainer = styled.div`
@@ -14,16 +17,17 @@ const DetailsContainer = styled.div`
 
 // Carte pour afficher les détails
 const DetailsCard = styled.div`
-  background: #fff;
+  background: #1f1f1f;
   border-radius: 15px;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
   padding: 20px 30px;
   max-width: 600px;
   width: 90%;
   text-align: center;
+  position: relative;
 
   h1 {
-    color: #2b2d42;
+    color: #FF6F61;
     font-size: 24px;
     margin-bottom: 15px;
   }
@@ -36,20 +40,20 @@ const DetailsCard = styled.div`
   }
 
   p {
-    color: #4a4a4a;
+    color: #dcdcdc;
     font-size: 16px;
     line-height: 1.6;
     margin-bottom: 15px;
   }
 
   strong {
-    color: #ff6f61;
+    color: #FF6F61;
   }
 
   .details-dates {
     font-style: italic;
     font-size: 14px;
-    color: #6c757d;
+    color: #dcdcdc;
   }
 `;
 
@@ -57,7 +61,7 @@ const DetailsCard = styled.div`
 const BackButton = styled.button`
   margin-top: 20px;
   padding: 10px 20px;
-  background-color: #ff6f61;
+  background-color: #FF6F61;
   color: #fff;
   font-size: 16px;
   border: none;
@@ -70,8 +74,41 @@ const BackButton = styled.button`
   }
 `;
 
+const DonateButton = styled.div`
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  font-size: 36px;
+  color: #FF6F61;
+  cursor: pointer;
+  transition: transform 0.3s ease;
+
+  &:hover {
+    transform: scale(1.2);
+  }
+`;
+
+const ProgressBar = styled.div`
+  width: 100%;
+  height: 10px;
+  background-color: #ddd;
+  border-radius: 5px;
+  margin: 10px 0;
+  position: relative;
+  overflow: hidden;
+`;
+
+const Progress = styled.div`
+  height: 100%;
+  width: ${(props) => props.width}%;
+  background-color: #FF6F61;
+  border-radius: 5px;
+  transition: width 0.3s ease;
+`;
+
 const CampaignDetails = () => {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [campaign, setCampaign] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -102,11 +139,27 @@ const CampaignDetails = () => {
     loadCampaignDetails();
   }, [id]);
 
+  const handleDonateClick = () => {
+    const userRole = localStorage.getItem('userRole');
+
+    if (userRole !== 'donor') {
+      toast.error('Seuls les donateurs peuvent faire des dons');
+      return;
+    }
+
+    if (campaign.currentAmount >= campaign.targetAmount) {
+      toast.error('Cette campagne a déjà atteint son objectif');
+      return;
+    }
+
+    navigate(`/donation/${id}`);
+  };
+
   if (loading) {
     return (
       <DetailsContainer>
         <DetailsCard>
-          <p>Chargement des détails...</p>
+          <p style={{ color: '#dcdcdc' }}>Chargement des détails...</p>
         </DetailsCard>
       </DetailsContainer>
     );
@@ -116,7 +169,7 @@ const CampaignDetails = () => {
     return (
       <DetailsContainer>
         <DetailsCard>
-          <p style={{ color: '#ff6f61' }}>{error}</p>
+          <p style={{ color: '#FF6F61' }}>{error}</p>
           <BackButton onClick={() => window.history.back()}>
             Retour à la liste
           </BackButton>
@@ -129,7 +182,7 @@ const CampaignDetails = () => {
     return (
       <DetailsContainer>
         <DetailsCard>
-          <p>Aucune campagne trouvée.</p>
+          <p style={{ color: '#dcdcdc' }}>Aucune campagne trouvée.</p>
           <BackButton onClick={() => window.history.back()}>
             Retour à la liste
           </BackButton>
@@ -138,16 +191,28 @@ const CampaignDetails = () => {
     );
   }
 
+  const progressPercentage = Math.min((campaign.currentAmount / campaign.targetAmount) * 100, 100);
+
   return (
     <DetailsContainer>
       <DetailsCard>
         <h1>{campaign.name}</h1>
+        {localStorage.getItem('userRole') === 'donor' && (
+          <DonateButton onClick={handleDonateClick}>
+            <FontAwesomeIcon icon={faDonate} />
+          </DonateButton>
+        )}
         <img src={campaign.bannerImage} alt={campaign.name} />
         <p>{campaign.description}</p>
         <p>
           <strong>Montant cible:</strong> {campaign.targetAmount} DT
-          <p><strong>Montant currant:</strong> {campaign.currentAmount} DT</p>
         </p>
+        <p>
+          <strong>Montant actuel:</strong> {campaign.currentAmount} DT
+        </p>
+        <ProgressBar>
+          <Progress width={progressPercentage} />
+        </ProgressBar>
         <p className="details-dates">
           <strong>Dates:</strong>{' '}
           {new Date(campaign.startDate).toLocaleDateString()} -{' '}

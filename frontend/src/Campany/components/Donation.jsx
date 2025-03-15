@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import styled, { keyframes, css } from 'styled-components';
 import { toast } from 'react-toastify';
 import { useNavigate, useParams } from 'react-router-dom';
-import { makeDonation ,updateCampaign,fetchCampaignById } from '../../api/api';
+import { makeDonation, updateCampaign, fetchCampaignById } from '../../api/api';
 import CryptoJS from 'crypto-js';
 
 // Animations
@@ -100,115 +100,178 @@ const Button = styled.button`
   border-radius: 8px;
 `;
 
-
-const Donation = ({ onClose }) => {
+const Donation = () => {
   const { id } = useParams();
   const [campaign, setCampaign] = useState(null);
-  const [isLoading, setIsLoading] = useState(true); // Assurez-vous que cet état est bien déclaré
+  const [isLoading, setIsLoading] = useState(true);
+  const navigate = useNavigate();
 
-
-
-  console.log('ID de la campagne:', id);
   const [formData, setFormData] = useState({
     donorName: '',
     donorEmail: '',
     amount: '',
-    campaign:id,
     paymentMethod: '',
     cardNumber: '',
   });
 
-  const navigate = useNavigate();
   useEffect(() => {
     const fetchCampaign = async () => {
-      setIsLoading(true);
+      if (!id) {
+        toast.error('ID de campagne manquant');
+        navigate('/company');
+        return;
+      }
+
       try {
-        console.log('Fetching campaign with ID:', id);
-        const response = await fetchCampaignById(id);  // Changé ici aussi
-        console.log('Campaign data received:', response);
-        setCampaign(response);
+        const campaignData = await fetchCampaignById(id);
+        if (!campaignData) {
+          toast.error('Campagne non trouvée');
+          navigate('/company');
+          return;
+        }
+        setCampaign(campaignData);
+
+        // Set donor email if available
+        const userEmail = localStorage.getItem('useremail');
+        if (userEmail) {
+          setFormData(prev => ({ ...prev, donorEmail: userEmail }));
+        }
       } catch (error) {
         console.error('Erreur lors du chargement de la campagne:', error);
         toast.error('Erreur lors du chargement de la campagne');
+        navigate('/company');
       } finally {
         setIsLoading(false);
       }
     };
 
-    if (id) {
-      fetchCampaign();
-    }
-  }, [id]);
-  useEffect(() => {
-    console.log('Avant de récupérer:', localStorage.getItem('email'));
-    const userEmail = localStorage.getItem('useremail'); 
-    console.log('Après récupération:', userEmail);
-    if (userEmail) {
-      setFormData((prev) => ({ ...prev, donorEmail: userEmail }));
-    }
-  }, []);
-  
+    fetchCampaign();
+  }, [id, navigate]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setFormData({ ...formData, [name]: value });
+    setFormData(prev => ({ ...prev, [name]: value }));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-  
-    // Vérifiez que la campagne est chargée
+
     if (!campaign) {
       toast.error('Données de la campagne non disponibles');
       return;
     }
-  
-    if (!id || !formData.amount || !formData.paymentMethod || !formData.donorName) {
+
+    // Check if campaign is complete
+    if (campaign.currentAmount >= campaign.targetAmount) {
+      toast.error('Cette campagne a déjà atteint son objectif');
+      navigate('/company');
+      return;
+    }
+
+    // Check if donation would exceed target amount
+    const amount = Number(formData.amount);
+    if (amount + campaign.currentAmount > campaign.targetAmount) {
+      toast.error(`Le don maximum possible pour cette campagne est de ${campaign.targetAmount - campaign.currentAmount} DT`);
+      return;
+    }
+
+    // Validate form data
+    if (!formData.amount || !formData.paymentMethod || !formData.donorName) {
       toast.error('Veuillez remplir tous les champs requis');
       return;
     }
-  
+
+    // Validate amount
+    if (isNaN(amount) || amount <= 0) {
+      toast.error('Le montant du don doit être supérieur à 0');
+      return;
+    }
+
+    // Validate card number if payment method is credit card
+    if (formData.paymentMethod === 'creditCard') {
+      if (!formData.cardNumber || !/^\d{16}$/.test(formData.cardNumber)) {
+        toast.error('Numéro de carte invalide. Veuillez entrer 16 chiffres.');
+        return;
+      }
+    }
+
     try {
-      const encryptedCardNumber = formData.cardNumber 
+      // Check authentication
+      const token = localStorage.getItem('token');
+      if (!token) {
+        toast.error('Session expirée, veuillez vous reconnecter');
+        navigate('/login');
+        return;
+      }
+
+      const encryptedCardNumber = formData.cardNumber && formData.paymentMethod === 'creditCard'
         ? CryptoJS.AES.encrypt(formData.cardNumber, 'votre_cle_secrete').toString()
         : '';
-  
-      // Formatage des données pour la donation
+
       const donationData = {
         campaign: id,
         donorName: formData.donorName.trim(),
-        donorEmail: formData.donorEmail.trim(),
-        amount: Number(formData.amount),
+        donorEmail: formData.donorEmail?.trim(),
+        amount: amount,
         paymentMethod: formData.paymentMethod,
         cardNumber: encryptedCardNumber
       };
-  
+
+      // Make the donation
       await makeDonation(donationData);
-  
-      // Mettre à jour le montant de la campagne
+
+      // Update campaign amount
       const updatedCampaignData = {
         ...campaign,
-        currentAmount: campaign.currentAmount + Number(formData.amount),
-        association: {
-          id: campaign.association.id
-        }
+        currentAmount: Number(campaign.currentAmount) + amount
       };
-  
+
       await updateCampaign(id, updatedCampaignData);
-  
+
       toast.success('Merci pour votre don !');
-      navigate('/Company');
+      navigate('/company');
     } catch (error) {
       console.error('Erreur lors du don:', error);
-      toast.error(error.response?.data?.message || 'Une erreur est survenue lors du don');
+
+      // Handle specific error messages
+      if (error.message === 'Session expirée, veuillez vous reconnecter') {
+        navigate('/login');
+      }
+
+      toast.error(error.message || 'Une erreur est survenue lors du don');
     }
+  };
 
-
-  };  return (
-    <>
-      <Overlay onClick={onClose} />
+  if (isLoading) {
+    return (
       <DonationWrapper>
-        <Title>Faire un Don</Title>
+        <Title>Chargement...</Title>
+      </DonationWrapper>
+    );
+  }
+
+  if (!campaign) {
+    return (
+      <DonationWrapper>
+        <Title>Campagne non trouvée</Title>
+      </DonationWrapper>
+    );
+  }
+
+  if (campaign.currentAmount >= campaign.targetAmount) {
+    return (
+      <DonationWrapper>
+        <Title>Cette campagne a atteint son objectif</Title>
+        <Button onClick={() => navigate('/company')}>Retour aux campagnes</Button>
+      </DonationWrapper>
+    );
+  }
+
+  return (
+    <>
+      <Overlay />
+      <DonationWrapper>
+        <Title>Faire un Don pour {campaign.name}</Title>
         <form onSubmit={handleSubmit}>
           <FormGroup>
             <StyledInput
@@ -220,7 +283,7 @@ const Donation = ({ onClose }) => {
               required
             />
           </FormGroup>
-          
+
           <FormGroup>
             <StyledInput
               type="number"
@@ -229,20 +292,24 @@ const Donation = ({ onClose }) => {
               value={formData.amount}
               onChange={handleChange}
               required
+              min="1"
             />
           </FormGroup>
+
           <FormGroup>
-          <StyledSelect
-  name="paymentMethod"
-  value={formData.paymentMethod}
-  onChange={handleChange}
-  required
->
-  <option value="">Méthode de paiement</option>
-  <option value="CREDIT_CARD">Carte de Crédit</option>
-  <option value="PAYPAL">Paypal</option>
-</StyledSelect>
+            <StyledSelect
+              name="paymentMethod"
+              value={formData.paymentMethod}
+              onChange={handleChange}
+              required
+            >
+              <option value="">Méthode de paiement</option>
+              <option value="creditCard">Carte de Crédit</option>
+              <option value="paypal">Paypal</option>
+            </StyledSelect>
           </FormGroup>
+
+          {formData.paymentMethod === 'creditCard' && (
             <FormGroup>
               <StyledInput
                 type="text"
@@ -251,8 +318,12 @@ const Donation = ({ onClose }) => {
                 value={formData.cardNumber}
                 onChange={handleChange}
                 required
+                pattern="\d{16}"
+                maxLength="16"
               />
             </FormGroup>
+          )}
+
           <Button type="submit">Soumettre</Button>
         </form>
       </DonationWrapper>

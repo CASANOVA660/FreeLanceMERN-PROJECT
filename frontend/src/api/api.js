@@ -39,12 +39,34 @@ export const login = async (email, password) => {
       email,
       password,
     });
-    console.log("Response data:", response.data); // Ajoutez ce log
+    console.log("Response data:", response.data);
+
+    // Store authentication data
+    if (response.data.token) {
+      localStorage.setItem('token', response.data.token);
+      localStorage.setItem('userRole', response.data.role);
+      localStorage.setItem('userId', response.data.userId);
+      localStorage.setItem('useremail', email);
+
+      // Set default authorization header for all future requests
+      axios.defaults.headers.common['Authorization'] = `Bearer ${response.data.token}`;
+    }
+
     return response.data;
   } catch (error) {
-    console.error("Error response:", error.response.data); // Ajoutez ce log
-    throw error.response.data;
+    console.error("Error response:", error.response?.data);
+    throw error.response?.data || error;
   }
+};
+
+// Add a function to check authentication
+export const checkAuth = () => {
+  const token = localStorage.getItem('token');
+  if (token) {
+    axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    return true;
+  }
+  return false;
 };
 
 
@@ -62,28 +84,66 @@ export const addCampagain = async (formData) => {
 
 export const makeDonation = async (donationData) => {
   try {
-    // Validation des données
+    // Validate required fields
     if (!donationData.campaign || !donationData.amount || !donationData.donorName) {
       throw new Error('Tous les champs requis doivent être remplis');
     }
 
-    // Structure exacte attendue par le backend
+    // Check authentication
+    const token = localStorage.getItem('token');
+    if (!token) {
+      throw new Error('Session expirée, veuillez vous reconnecter');
+    }
+
+    // Set authorization header
+    axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
+    // Validate payment method
+    if (!['creditCard', 'paypal'].includes(donationData.paymentMethod)) {
+      throw new Error('Méthode de paiement non valide');
+    }
+
+    // Format the payload
     const payload = {
-      campaign_id: donationData.campaign, // Changé de campaignId à campaign_id
-      donorName: donationData.donorName,
-      donorEmail: donationData.donorEmail || '',
+      campaign: donationData.campaign,
+      donorName: donationData.donorName.trim(),
+      donorEmail: donationData.donorEmail ? donationData.donorEmail.trim() : '',
       amount: Number(donationData.amount),
-      paymentMethod: donationData.paymentMethod.toUpperCase(), // Conversion en majuscules
+      paymentMethod: donationData.paymentMethod.toLowerCase(),
       cardNumber: donationData.cardNumber || ''
     };
 
-    console.log('Payload final:', payload);
+    // Validate amount
+    if (isNaN(payload.amount) || payload.amount <= 0) {
+      throw new Error('Le montant du don doit être supérieur à 0');
+    }
+
+    console.log('Sending donation payload:', {
+      ...payload,
+      cardNumber: payload.cardNumber ? '****' : undefined
+    });
 
     const response = await axios.post('http://localhost:5000/api/donations/donate', payload);
     return response.data;
   } catch (error) {
     console.error("Erreur lors de l'envoi du don:", error);
-    throw new Error(error.response?.data?.message || "Erreur lors de l'envoi du don");
+
+    // Handle specific error cases
+    if (error.response?.status === 401) {
+      localStorage.clear();
+      throw new Error('Session expirée, veuillez vous reconnecter');
+    }
+
+    if (error.response?.status === 500) {
+      throw new Error('Erreur serveur lors du traitement du don. Veuillez réessayer.');
+    }
+
+    // Handle validation errors from the backend
+    if (error.response?.data?.errors?.paymentMethod) {
+      throw new Error('Méthode de paiement non valide');
+    }
+
+    throw error.response?.data?.message || error.message || "Une erreur est survenue lors du don";
   }
 };
 
@@ -169,11 +229,29 @@ export const fetchCampaignDetails = async (id) => {
 
 export const fetchCampaignById = async (id) => {
   try {
+    if (!id) {
+      throw new Error('ID de campagne non spécifié');
+    }
+
+    // Check authentication
+    checkAuth();
+
     const response = await axios.get(`${API_URLL}/${id}`);
-    return response.data; // Assurez-vous que la réponse contient { _id, name }
+    if (!response.data) {
+      throw new Error('Campagne non trouvée');
+    }
+    return response.data;
   } catch (error) {
     console.error('Erreur lors de la récupération de la campagne', error);
-    throw error;
+    if (error.response?.status === 404) {
+      throw new Error('Campagne non trouvée');
+    }
+    if (error.response?.status === 401) {
+      // Clear invalid authentication
+      localStorage.clear();
+      throw new Error('Session expirée, veuillez vous reconnecter');
+    }
+    throw error.response?.data?.message || error.message || 'Erreur lors de la récupération de la campagne';
   }
 };
 
@@ -206,36 +284,58 @@ export const updateCampaign = async (id, campaignData) => {
 
 export const fetchDonations = async (email) => {
   try {
-    // Correction de l'URL pour utiliser le bon endpoint avec le paramètre email
-    const response = await axios.get(`http://localhost:5000/api/donations/by-email`, {
-      params: {
-        email: email
+    if (!email) {
+      console.warn('Email non spécifié pour la récupération des donations');
+      return [];
+    }
+
+    // Check authentication
+    const token = localStorage.getItem('token');
+    if (!token) {
+      throw new Error('Session expirée, veuillez vous reconnecter');
+    }
+
+    // Set authorization header explicitly for this request
+    const response = await axios.get(`http://localhost:5000/api/donations/user/${email}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
       }
     });
 
-    console.log('Données des donations reçues:', response.data);
-
-    // Vérifier si la réponse est vide ou contient un message
-    if (response.data.message) {
-      return []; // Retourner un tableau vide si aucune donation n'est trouvée
+    // Handle empty response
+    if (!response.data) {
+      console.log('Aucune donation trouvée');
+      return [];
     }
 
-    return response.data;
+    // Transform the data if needed
+    const donations = Array.isArray(response.data) ? response.data : [response.data];
+
+    // Log successful response
+    console.log('Donations récupérées:', donations);
+
+    return donations.map(donation => ({
+      ...donation,
+      campaign: donation.campaign || { name: 'Campagne inconnue' },
+      createdAt: donation.createdAt || new Date().toISOString(),
+      paymentMethod: donation.paymentMethod || 'Non spécifié'
+    }));
+
   } catch (error) {
     console.error('Erreur lors de la récupération des donations:', error);
 
-    // Gestion plus détaillée des erreurs
-    if (error.response) {
-      // La requête a été faite et le serveur a répondu avec un code d'état
-      // qui ne fait pas partie de la plage 2xx
-      throw error.response.data;
-    } else if (error.request) {
-      // La requête a été faite mais aucune réponse n'a été reçue
-      throw { error: "Aucune réponse du serveur" };
-    } else {
-      // Une erreur s'est produite lors de la configuration de la requête
-      throw { error: "Erreur lors de la configuration de la requête" };
+    // Handle specific error cases
+    if (error.response?.status === 404) {
+      console.log('Aucune donation trouvée (404)');
+      return [];
     }
+
+    if (error.response?.status === 401) {
+      localStorage.clear();
+      throw new Error('Session expirée, veuillez vous reconnecter');
+    }
+
+    throw new Error(error.response?.data?.message || error.message || 'Erreur lors de la récupération des donations');
   }
 };
 
